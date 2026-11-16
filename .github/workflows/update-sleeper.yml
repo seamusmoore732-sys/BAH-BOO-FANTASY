@@ -1,0 +1,47 @@
+name: Update Sleeper data
+
+on:
+  schedule:
+    - cron: "0 10 * * 2"   # every Tuesday at 10:00 UTC (6am Eastern in summer, 5am in winter)
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Fetch Sleeper data
+        run: |
+          cat > fetch.mjs <<'EOF'
+          const B = "https://api.sleeper.app/v1/league/";
+          const J = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error(u + " -> " + r.status); return r.json(); };
+          let id = "1383512541614858240";
+          const out = [];
+          while (id && id !== "0") {
+            const L = await J(B + id), us = await J(B + id + "/users"), rs = await J(B + id + "/rosters");
+            let wb = [];
+            try { wb = await J(B + id + "/winners_bracket"); } catch (e) {}
+            const ps = L.settings.playoff_week_start || 15;
+            const ms = await Promise.all(Array.from({ length: ps + 2 }, (_, i) => J(B + id + "/matchups/" + (i + 1)).catch(() => [])));
+            out.push({ L, us, rs, wb, ms });
+            id = L.previous_league_id;
+          }
+          import("node:fs").then((fs) => { fs.writeFileSync("sleeper-data.json", JSON.stringify(out)); console.log("saved", out.length, "seasons"); });
+          EOF
+          node fetch.mjs
+          rm fetch.mjs
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add sleeper-data.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update Sleeper data"
+            git push
+          fi
